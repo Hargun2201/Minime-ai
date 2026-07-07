@@ -5,12 +5,12 @@ import sys
 import random
 import logging
 import threading
-from PySide6.QtCore import Qt, QPoint, QSize, QTimer, QPropertyAnimation, QEasingCurve
-from PySide6.QtGui import QIcon, QColor, QFont, QAction
+from PySide6.QtCore import Qt, QPoint, QSize, QTimer, QPropertyAnimation, QEasingCurve, QSequentialAnimationGroup
+from PySide6.QtGui import QIcon, QColor, QFont, QAction, QPixmap
 from PySide6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
-    QPushButton, QProgressBar, QFrame, QGraphicsDropShadowEffect, 
-    QSystemTrayIcon, QMenu, QInputDialog, QListWidget, QLineEdit, QDialog
+    QPushButton, QFrame, QGraphicsDropShadowEffect, QGraphicsOpacityEffect,
+    QSystemTrayIcon, QMenu, QInputDialog
 )
 from PySide6.QtSvgWidgets import QSvgWidget
 
@@ -43,7 +43,6 @@ def speak_text_async(text: str):
     def run_tts():
         try:
             engine = pyttsx3.init()
-            # Adjust speech rate for a friendlier voice
             engine.setProperty('rate', 150)
             engine.say(text)
             engine.runAndWait()
@@ -66,7 +65,6 @@ class MiniMeCompanion(QWidget):
         
         # UI State Variables
         self.current_emotion = EMOTION_WAITING
-        self.is_panel_visible = True
         self.drag_position = QPoint()
         
         # Pomodoro Timer Variables
@@ -85,247 +83,307 @@ class MiniMeCompanion(QWidget):
         interval_mins = int(self.db.get_setting("water_interval_mins", 60))
         self.reminder_timer.start(interval_mins * 60 * 1000)
 
-        # Initial Greeting
-        QTimer.singleShot(1000, lambda: self.say(f"Hi {self.username}! Ready to crush your goals today? 🚀"))
+        # Setup auto-hide timers
+        self.auto_hide_timer = QTimer(self)
+        self.auto_hide_timer.setSingleShot(True)
+        self.auto_hide_timer.timeout.connect(self.fade_out)
+
+        # Start Idle Floating Animation
+        self.start_bobbing_animation()
+
+        # Initial Summoning
+        QTimer.singleShot(1000, lambda: self.summon(f"Hi {self.username}! Ready to crush your goals today? 🚀"))
 
     def init_ui(self):
-        # Configure Frameless, Translucent, Always-on-Top Window
+        # Configure Frameless, Translucent, Always-on-Top Tool Window
         self.setWindowFlags(Qt.Tool | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
         self.setAttribute(Qt.WA_TranslucentBackground)
-        self.setFixedSize(300, 480)
         
-        # Position window in the bottom-right corner of the primary screen
-        try:
-            screen_geom = QApplication.primaryScreen().availableGeometry()
-            x = screen_geom.width() - 320
-            y = screen_geom.height() - 500
-            self.move(x, y)
-        except Exception as e:
-            logger.warning(f"Failed to position window: {e}")
-
-        
-        # Set Global Theme Stylesheet
+        # Clean compact window size
+        self.setFixedSize(300, 260)
         self.apply_theme()
 
-        # Layout Container with Custom Shadow Effect
-        main_layout = QVBoxLayout(self)
-        main_layout.setContentsMargins(15, 15, 15, 15)
-        
-        self.container = QFrame(self)
-        self.container.setObjectName("MainContainer")
-        self.container.setStyleSheet(f"""
-            QFrame#MainContainer {{
-                background-color: {self.get_theme_color("bg_main")};
-                border: 2px solid {self.get_theme_color("border_color")};
-                border-radius: 20px;
-            }}
-        """)
-        
-        container_layout = QVBoxLayout(self.container)
-        container_layout.setContentsMargins(15, 15, 15, 15)
-        container_layout.setSpacing(12)
+        # Opacity effect for clean fade-in/fade-out
+        self.opacity_effect = QGraphicsOpacityEffect(self)
+        self.setGraphicsEffect(self.opacity_effect)
+        self.opacity_effect.setOpacity(0.0)  # Start hidden
 
-        # 1. SPEECH BUBBLE (Glassmorphic style)
+        self.opacity_anim = QPropertyAnimation(self.opacity_effect, b"opacity")
+        self.opacity_anim.setDuration(600)
+        self.opacity_anim.setEasingCurve(QEasingCurve.InOutQuad)
+
+        # 1. SPEECH BUBBLE (Absolute positioning at top)
         self.bubble_frame = QFrame(self)
-        self.bubble_frame.setObjectName("GlassCard")
-        self.bubble_frame.setFrameShape(QFrame.StyledPanel)
+        self.bubble_frame.setGeometry(10, 10, 280, 85)
+        self.bubble_frame.setObjectName("SpeechBubble")
         
+        # Premium custom speech bubble style
+        self.update_bubble_style()
+
         bubble_layout = QVBoxLayout(self.bubble_frame)
         bubble_layout.setContentsMargins(12, 10, 12, 10)
-        
         self.bubble_label = QLabel("...", self)
         self.bubble_label.setWordWrap(True)
         self.bubble_label.setFont(QFont("Inter", 11))
         self.bubble_label.setAlignment(Qt.AlignCenter)
-        self.bubble_label.setStyleSheet(f"color: {self.get_theme_color('text_primary')};")
+        self.bubble_label.setStyleSheet("color: inherit; background: transparent;")
         bubble_layout.addWidget(self.bubble_label)
-        
-        container_layout.addWidget(self.bubble_frame)
 
-        # 2. AVATAR SVG DISPLAY
+        # Drop Shadow for speech bubble
+        bubble_shadow = QGraphicsDropShadowEffect(self)
+        bubble_shadow.setBlurRadius(10)
+        bubble_shadow.setColor(QColor(0, 0, 0, 50))
+        bubble_shadow.setOffset(0, 3)
+        self.bubble_frame.setGraphicsEffect(bubble_shadow)
+
+        # 2. AVATAR CONTAINER (Absolute positioning in middle/bottom)
         self.avatar_container = QWidget(self)
-        avatar_layout = QHBoxLayout(self.avatar_container)
-        avatar_layout.setAlignment(Qt.AlignCenter)
-        avatar_layout.setContentsMargins(0, 0, 0, 0)
+        self.avatar_container.setGeometry(85, 110, 130, 130)
         
-        self.avatar_widget = QSvgWidget(self)
-        self.avatar_widget.setFixedSize(130, 130)
-        avatar_layout.addWidget(self.avatar_widget)
-        
-        container_layout.addWidget(self.avatar_container)
+        container_layout = QHBoxLayout(self.avatar_container)
+        container_layout.setContentsMargins(0, 0, 0, 0)
+        container_layout.setAlignment(Qt.AlignCenter)
 
-        # 3. INTERACTIVE MINI PANEL (XP, level, quick buttons)
-        self.panel_frame = QFrame(self)
-        self.panel_frame.setObjectName("CardWidget")
-        
-        panel_layout = QVBoxLayout(self.panel_frame)
-        panel_layout.setContentsMargins(12, 12, 12, 12)
-        panel_layout.setSpacing(10)
-        
-        # Level & Progress info
-        self.level_label = QLabel(f"Lvl {self.level} - {LEVEL_NAMES.get(self.level, 'Helper')}", self)
-        self.level_label.setFont(QFont("Outfit", 12, QFont.Bold))
-        self.level_label.setStyleSheet(f"color: {self.get_theme_color('text_primary')};")
-        panel_layout.addWidget(self.level_label)
-        
-        # XP Progress Bar
-        self.xp_bar = QProgressBar(self)
-        self.xp_bar.setTextVisible(False)
-        self.update_xp_bar()
-        panel_layout.addWidget(self.xp_bar)
+        # Label for standard image formats (Bitmoji PNG/JPG/GIF)
+        self.avatar_image_label = QLabel(self.avatar_container)
+        self.avatar_image_label.setScaledContents(True)
+        self.avatar_image_label.setStyleSheet("background: transparent;")
+        self.avatar_image_label.hide()
+        container_layout.addWidget(self.avatar_image_label)
 
-        # Quick Actions Grid
-        actions_layout = QHBoxLayout()
-        actions_layout.setSpacing(6)
-        
-        self.btn_water = QPushButton("💧 +250ml", self)
-        self.btn_water.clicked.connect(self.log_water_click)
-        
-        self.btn_focus = QPushButton("⏱️ Focus", self)
-        self.btn_focus.clicked.connect(self.toggle_focus_timer)
-        
-        self.btn_mood = QPushButton("😊 Mood", self)
-        self.btn_mood.clicked.connect(self.log_mood_prompt)
-        
-        actions_layout.addWidget(self.btn_water)
-        actions_layout.addWidget(self.btn_focus)
-        actions_layout.addWidget(self.btn_mood)
-        
-        panel_layout.addLayout(actions_layout)
-        container_layout.addWidget(self.panel_frame)
+        # SVG Widget for default SVGs
+        self.avatar_svg_widget = QSvgWidget(self.avatar_container)
+        self.avatar_svg_widget.setFixedSize(130, 130)
+        self.avatar_svg_widget.setStyleSheet("background: transparent;")
+        container_layout.addWidget(self.avatar_svg_widget)
 
-        # Drop Shadow for overall premium look
-        shadow = QGraphicsDropShadowEffect(self)
-        shadow.setBlurRadius(15)
-        shadow.setColor(QColor(0, 0, 0, 100))
-        shadow.setOffset(0, 5)
-        self.container.setGraphicsEffect(shadow)
+        # Connect click event directly to the container for winks/reacts
+        self.avatar_container.mousePressEvent = self.on_avatar_clicked
 
-        main_layout.addWidget(self.container)
+        # Position window in the bottom-right corner of the primary screen
+        self.reposition_to_bottom_right()
 
-        # Bubble fade animation
-        self.bubble_anim = QPropertyAnimation(self.bubble_frame, b"maximumSize")
-        self.bubble_anim.setDuration(300)
-        self.bubble_anim.setEasingCurve(QEasingCurve.OutQuad)
-        
-        # Connect Click Event on Avatar
-        self.avatar_widget.mousePressEvent = self.on_avatar_clicked
+    def update_bubble_style(self):
+        self.bubble_frame.setStyleSheet(f"""
+            QFrame#SpeechBubble {{
+                background-color: {self.get_theme_color("bg_card_opaque")};
+                border: 2px solid {self.get_theme_color("border_color")};
+                border-radius: 16px;
+                color: {self.get_theme_color("text_primary")};
+            }}
+        """)
 
-    # Theme Management
     def apply_theme(self):
         theme_name = self.db.get_setting("theme", "dark")
         self.setStyleSheet(get_stylesheet(theme_name))
+        if hasattr(self, "bubble_frame"):
+            self.update_bubble_style()
         
     def get_theme_color(self, key: str) -> str:
         theme_name = self.db.get_setting("theme", "dark")
         from themes.styles import THEMES
         return THEMES.get(theme_name, THEMES["dark"]).get(key, "#ffffff")
 
-    def update_xp_bar(self):
-        xp_needed = int(XP_BASE * (self.level ** XP_FACTOR))
-        self.xp_bar.setMaximum(xp_needed)
-        self.xp_bar.setValue(self.xp)
-        self.level_label.setText(f"Lvl {self.level} - {LEVEL_NAMES.get(self.level, 'Helper')}")
+    def reposition_to_bottom_right(self):
+        try:
+            screen_geom = QApplication.primaryScreen().availableGeometry()
+            x = screen_geom.width() - 320
+            y = screen_geom.height() - 280
+            self.move(x, y)
+        except Exception as e:
+            logger.warning(f"Failed to position window: {e}")
 
-    # Core Communication (Bubble + Speech)
-    def say(self, text: str, emotion: str = None):
-        """Displays text in the bubble and speaks it if audio is enabled."""
+    # Micro-Animations
+    def start_bobbing_animation(self):
+        """Creates a continuous vertical hovering effect for the avatar."""
+        self.bob_group = QSequentialAnimationGroup(self)
+
+        # Up movement
+        self.anim_up = QPropertyAnimation(self.avatar_container, b"pos")
+        self.anim_up.setDuration(1500)
+        self.anim_up.setStartValue(QPoint(85, 110))
+        self.anim_up.setEndValue(QPoint(85, 102))
+        self.anim_up.setEasingCurve(QEasingCurve.InOutSine)
+
+        # Down movement
+        self.anim_down = QPropertyAnimation(self.avatar_container, b"pos")
+        self.anim_down.setDuration(1500)
+        self.anim_down.setStartValue(QPoint(85, 102))
+        self.anim_down.setEndValue(QPoint(85, 110))
+        self.anim_down.setEasingCurve(QEasingCurve.InOutSine)
+
+        self.bob_group.addAnimation(self.anim_up)
+        self.bob_group.addAnimation(self.anim_down)
+        self.bob_group.setLoopCount(-1)  # Infinite
+        self.bob_group.start()
+
+    # Fade & Lifecycle System
+    def summon(self, text: str, emotion: str = None, duration: int = 7):
+        """Fades in the companion, displays the bubble, and registers an auto-hide timer."""
+        self.auto_hide_timer.stop()
+        
+        # Update content & speak
         self.bubble_label.setText(text)
         if emotion:
             self.set_emotion(emotion)
         
-        # Shake / bounce bubble effect using micro-animation
-        self.bubble_frame.move(self.bubble_frame.x(), self.bubble_frame.y() - 5)
-        QTimer.singleShot(100, lambda: self.bubble_frame.move(self.bubble_frame.x(), self.bubble_frame.y() + 5))
-        
-        # TTS Speak if audio configuration permits
+        # Speak text if voice is enabled
         voice_on = self.db.get_setting("voice_enabled", "1") == "1"
         if voice_on:
             speak_text_async(text)
 
-    def set_emotion(self, emotion: str):
-        """Updates the Avatar SVG graphic based on the emotion key."""
-        self.current_emotion = emotion
-        filename = AVATAR_FILES.get(emotion, "waiting.svg")
-        path = os.path.join(AVATARS_DIR, filename)
-        if os.path.exists(path):
-            self.avatar_widget.load(path)
-            logger.debug(f"Emotion updated to {emotion} using file {path}")
-        else:
-            logger.warning(f"Avatar file not found: {path}")
+        # Shake speech bubble slightly on popup
+        self.bubble_frame.move(self.bubble_frame.x(), self.bubble_frame.y() - 3)
+        QTimer.singleShot(100, lambda: self.bubble_frame.move(self.bubble_frame.x(), self.bubble_frame.y() + 3))
 
-    # Interactive Click Reactions
+        # Start fade-in
+        self.show()
+        self.opacity_anim.stop()
+        try:
+            self.opacity_anim.finished.disconnect()
+        except Exception:
+            pass
+        self.opacity_anim.setStartValue(self.opacity_effect.opacity())
+        self.opacity_anim.setEndValue(1.0)
+        self.opacity_anim.start()
+
+        # Set auto-hide timer
+        self.auto_hide_timer.start(duration * 1000)
+
+    def fade_out(self):
+        """Fades out and hides the window when tasks/speeches are finished."""
+        self.opacity_anim.stop()
+        try:
+            self.opacity_anim.finished.disconnect()
+        except Exception:
+            pass
+        self.opacity_anim.setStartValue(self.opacity_effect.opacity())
+        self.opacity_anim.setEndValue(0.0)
+        self.opacity_anim.finished.connect(self.hide)
+        self.opacity_anim.start()
+
+    # Custom Avatar & Bitmoji loading
+    def set_emotion(self, emotion: str):
+        """Updates the graphic, preferring custom Bitmojis, falling back to SVG."""
+        self.current_emotion = emotion
+        
+        # 1. Search for custom Bitmoji
+        extensions = ["png", "jpg", "jpeg", "webp", "gif"]
+        bitmoji_path = None
+        
+        # Try emotion-specific first, e.g. bitmoji_happy.png
+        for ext in extensions:
+            p = os.path.join(AVATARS_DIR, f"bitmoji_{emotion}.{ext}")
+            if os.path.exists(p):
+                bitmoji_path = p
+                break
+                
+        # Fallback to general bitmoji.png
+        if not bitmoji_path:
+            for ext in extensions:
+                p = os.path.join(AVATARS_DIR, f"bitmoji.{ext}")
+                if os.path.exists(p):
+                    bitmoji_path = p
+                    break
+        
+        # 2. Render selected asset
+        if bitmoji_path:
+            self.avatar_svg_widget.hide()
+            self.avatar_image_label.show()
+            
+            # Support animated GIFs
+            if bitmoji_path.lower().endswith(".gif"):
+                from PySide6.QtGui import QMovie
+                movie = QMovie(bitmoji_path)
+                movie.setScaledSize(QSize(130, 130))
+                self.avatar_image_label.setMovie(movie)
+                movie.start()
+            else:
+                pixmap = QPixmap(bitmoji_path)
+                scaled = pixmap.scaled(130, 130, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                self.avatar_image_label.setPixmap(scaled)
+        else:
+            # Standard SVG fallback
+            self.avatar_image_label.hide()
+            self.avatar_svg_widget.show()
+            filename = AVATAR_FILES.get(emotion, "waiting.svg")
+            path = os.path.join(AVATARS_DIR, filename)
+            if os.path.exists(path):
+                self.avatar_svg_widget.load(path)
+
+    # Click interactions
     def on_avatar_clicked(self, event):
         if event.button() == Qt.LeftButton:
-            # Cycle through positive animations and state motivational quotes
-            self.set_emotion(EMOTION_EXCITED)
+            # Re-summon / speak a new quote
             quote = random.choice(MOTIVATIONAL_QUOTES)
-            self.say(quote)
-            self.gain_xp(5)  # Fun minor click reward!
-            
-            # Revert to waiting state after 4 seconds
-            QTimer.singleShot(4000, lambda: self.set_emotion(EMOTION_WAITING))
+            self.summon(quote, EMOTION_EXCITED, duration=6)
+            self.gain_xp(5)
 
     def trigger_random_reminder(self):
-        """Periodically triggers reminders like drinking water."""
         reminder = random.choice(WATER_REMINDERS).format(username=self.username)
-        self.say(reminder, EMOTION_THINKING)
+        self.summon(reminder, EMOTION_THINKING, duration=8)
 
-    # Habit Logging Functions
+    # Habit Logging Actions
     def log_water_click(self):
         daily_total = self.db.add_water(250)
         self.gain_xp(XP_REWARDS["water"])
-        self.say(f"Awesome! Hydrated +250ml. Today's total: {daily_total}ml. Keep it up! 💧", EMOTION_HAPPY)
+        self.summon(f"Hydration logged! +250ml. Today: {daily_total}ml. Keep it up! 💧", EMOTION_HAPPY, duration=6)
 
     def log_mood_prompt(self):
+        # Temporarily stop auto-hide while dialog is showing
+        self.auto_hide_timer.stop()
+        
         items = ["Happy", "Calm", "Anxious", "Tired", "Stressed", "Productive"]
-        item, ok = QInputDialog.getItem(self, "Log Mood", "How are you feeling right now?", items, 0, False)
+        item, ok = QInputDialog.getItem(self, "Log Mood", "How are you feeling?", items, 0, False)
+        
         if ok and item:
             self.db.log_mood(item)
             if item in ["Happy", "Productive", "Calm"]:
-                self.say(f"So glad to hear you're feeling {item.lower()}! Let's sustain this flow. ✨", EMOTION_EXCITED)
+                self.summon(f"Awesome! Feeling {item.lower()}. Let's maintain this flow! ✨", EMOTION_EXCITED, duration=6)
             else:
-                self.say(f"Acknowledge how you feel. Take a deep breath. You are doing great. 🤍", EMOTION_SAD)
+                self.summon(f"Acknowledge how you feel. Take a deep breath. You got this. 🤍", EMOTION_SAD, duration=6)
+        else:
+            # Reset timer if cancelled
+            self.auto_hide_timer.start(3000)
 
-    # Pomodoro Timer Implementation
+    # Focus Timer Logic
     def toggle_focus_timer(self):
         if self.is_pomodoro_active:
-            # Stop Pomodoro
             self.pomodoro_timer.stop()
             self.is_pomodoro_active = False
-            self.btn_focus.setText("⏱️ Focus")
-            self.say("Focus session cancelled. Rest up! 🧘", EMOTION_WAITING)
+            self.update_tray_focus_text()
+            self.summon("Focus session cancelled. Rest up! 🧘", EMOTION_WAITING, duration=5)
         else:
-            # Start Pomodoro (25 minutes by default)
             duration_mins = int(self.db.get_setting("pomodoro_duration", 25))
             self.pomodoro_remaining_seconds = duration_mins * 60
-            self.pomodoro_timer.start(1000) # Every 1 second
+            self.pomodoro_timer.start(1000)
             self.is_pomodoro_active = True
-            self.set_emotion(EMOTION_THINKING)
-            self.say(f"Let's focus for {duration_mins} minutes, {self.username}! No distractions. 🧠", EMOTION_THINKING)
-            self.update_focus_button_text()
+            self.update_tray_focus_text()
+            self.summon(f"Focus timer started for {duration_mins} minutes! Keep coding. 🧠", EMOTION_THINKING, duration=6)
 
     def update_pomodoro(self):
         if self.pomodoro_remaining_seconds > 0:
             self.pomodoro_remaining_seconds -= 1
-            self.update_focus_button_text()
-            if self.pomodoro_remaining_seconds % 300 == 0:  # Remind motivational quotes every 5 mins
-                self.say(random.choice(MOTIVATIONAL_QUOTES), EMOTION_THINKING)
+            self.update_tray_focus_text()
+            if self.pomodoro_remaining_seconds % 300 == 0:  # Every 5 mins, popup a quote
+                self.summon(random.choice(MOTIVATIONAL_QUOTES), EMOTION_THINKING, duration=6)
         else:
             self.pomodoro_timer.stop()
             self.is_pomodoro_active = False
-            self.btn_focus.setText("⏱️ Focus")
+            self.update_tray_focus_text()
             
-            # Log successful focus session & reward XP
+            # Save focus data & gain XP
             self.db.add_focus_session(25, "study")
             self.gain_xp(XP_REWARDS["pomodoro"])
-            self.say(f"Spectacular job! Focus session completed. +{XP_REWARDS['pomodoro']} XP gained! 🏆", EMOTION_EXCITED)
+            self.summon(f"Spectacular! Focus session completed. +{XP_REWARDS['pomodoro']} XP! 🏆", EMOTION_EXCITED, duration=8)
 
-    def update_focus_button_text(self):
-        mins, secs = divmod(self.pomodoro_remaining_seconds, 60)
-        self.btn_focus.setText(f"⏱️ {mins:02d}:{secs:02d}")
+    def update_tray_focus_text(self):
+        if self.is_pomodoro_active:
+            mins, secs = divmod(self.pomodoro_remaining_seconds, 60)
+            self.act_focus.setText(f"⏱️ Cancel Focus ({mins:02d}:{secs:02d})")
+        else:
+            self.act_focus.setText("⏱️ Start Focus Session")
 
-    # Gamification Progress Engine
     def gain_xp(self, amount: int):
         self.xp += amount
         xp_needed = int(XP_BASE * (self.level ** XP_FACTOR))
@@ -334,12 +392,11 @@ class MiniMeCompanion(QWidget):
             self.xp -= xp_needed
             self.level += 1
             self.db.set_stat("level", self.level)
-            self.say(f"🎉 LEVEL UP! You reached Level {self.level} - {LEVEL_NAMES.get(self.level, 'Expert')}! 🎉", EMOTION_EXCITED)
+            self.summon(f"🎉 LEVEL UP! You reached Level {self.level} - {LEVEL_NAMES.get(self.level, 'Expert')}! 🎉", EMOTION_EXCITED, duration=8)
             
         self.db.set_stat("xp", self.xp)
-        self.update_xp_bar()
 
-    # Dragging & Context Menu Window Handlers
+    # Window Handlers
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
             if hasattr(event, 'globalPosition'):
@@ -359,64 +416,15 @@ class MiniMeCompanion(QWidget):
             event.accept()
 
     def contextMenuEvent(self, event):
-        menu = QMenu(self)
-        menu.setStyleSheet(f"""
-            QMenu {{
-                background-color: {self.get_theme_color('bg_sidebar')};
-                border: 1px solid {self.get_theme_color('border_color')};
-                border-radius: 8px;
-                padding: 5px;
-            }}
-            QMenu::item {{
-                padding: 6px 20px;
-                color: {self.get_theme_color('text_primary')};
-            }}
-            QMenu::item:selected {{
-                background-color: {self.get_theme_color('border_color')};
-                border-radius: 4px;
-            }}
-        """)
-        
-        act_toggle_panel = QAction("Toggle Info Panel", self)
-        act_toggle_panel.triggered.connect(self.toggle_panel)
-        menu.addAction(act_toggle_panel)
-        
-        act_change_theme = QAction("Switch Theme (Light/Dark)", self)
-        act_change_theme.triggered.connect(self.toggle_theme)
-        menu.addAction(act_change_theme)
-        
-        act_reset_stats = QAction("View Progress Report", self)
-        act_reset_stats.triggered.connect(self.show_progress_dialog)
-        menu.addAction(act_reset_stats)
-        
-        menu.addSeparator()
-        
-        act_exit = QAction("Exit MiniMe", self)
-        act_exit.triggered.connect(QApplication.instance().quit)
-        menu.addAction(act_exit)
-        
+        menu = self.create_actions_menu()
         menu.exec(event.globalPos())
 
-    def toggle_panel(self):
-        self.is_panel_visible = not self.is_panel_visible
-        self.panel_frame.setVisible(self.is_panel_visible)
-        new_height = 480 if self.is_panel_visible else 260
-        self.setFixedSize(300, new_height)
-
     def toggle_theme(self):
-        current_theme = self.db.get_setting("theme", "dark")
-        new_theme = "light" if current_theme == "dark" else "dark"
+        current = self.db.get_setting("theme", "dark")
+        new_theme = "light" if current == "dark" else "dark"
         self.db.set_setting("theme", new_theme)
         self.apply_theme()
-        # Repaint custom container style
-        self.container.setStyleSheet(f"""
-            QFrame#MainContainer {{
-                background-color: {self.get_theme_color("bg_main")};
-                border: 2px solid {self.get_theme_color("border_color")};
-                border-radius: 20px;
-            }}
-        """)
-        self.say(f"Switched to {new_theme} mode! 🎨")
+        self.summon(f"Switched to {new_theme} theme! 🎨", duration=4)
 
     def show_progress_dialog(self):
         water_data = self.db.get_weekly_water_data()
@@ -426,62 +434,103 @@ class MiniMeCompanion(QWidget):
         total_coding = sum(mins for _, mins in focus_data.get("coding", []))
         
         report = (
-            f"--- Weekly Activity Summary ---\n\n"
-            f"💧 Water Consumption: {total_water} ml\n"
-            f"📚 Study Focus: {total_study} minutes\n"
-            f"💻 Coding Focus: {total_coding} minutes\n\n"
-            f"XP Level: Level {self.level} ({self.xp} XP)"
+            f"Weekly Report:\n"
+            f"💧 Water: {total_water} ml\n"
+            f"📚 Study: {total_study} mins\n"
+            f"💻 Coding: {total_coding} mins\n"
+            f"⭐ Level {self.level} ({self.xp} XP)"
         )
-        self.say(report, EMOTION_EXCITED)
+        self.summon(report, EMOTION_HAPPY, duration=8)
+
+    # Create Context Menu helper
+    def create_actions_menu(self) -> QMenu:
+        menu = QMenu(self)
+        menu.setStyleSheet(f"""
+            QMenu {{
+                background-color: {self.get_theme_color('bg_sidebar')};
+                border: 1px solid {self.get_theme_color('border_color')};
+                border-radius: 8px;
+                padding: 4px;
+            }}
+            QMenu::item {{
+                padding: 6px 18px;
+                color: {self.get_theme_color('text_primary')};
+            }}
+            QMenu::item:selected {{
+                background-color: {self.get_theme_color('border_color')};
+                border-radius: 4px;
+            }}
+        """)
+        
+        act_summon = QAction("🙋 Summon Companion", self)
+        act_summon.triggered.connect(lambda: self.summon(random.choice(MOTIVATIONAL_QUOTES)))
+        menu.addAction(act_summon)
+        
+        menu.addSeparator()
+
+        act_water = QAction("💧 Log Water (+250ml)", self)
+        act_water.triggered.connect(self.log_water_click)
+        menu.addAction(act_water)
+        
+        self.act_focus = QAction(self)
+        self.update_workspace_focus_action_text()
+        self.act_focus.triggered.connect(self.toggle_focus_timer)
+        menu.addAction(self.act_focus)
+        
+        act_mood = QAction("😊 Log Mood", self)
+        act_mood.triggered.connect(self.log_mood_prompt)
+        menu.addAction(act_mood)
+        
+        act_report = QAction("📊 Progress Report", self)
+        act_report.triggered.connect(self.show_progress_dialog)
+        menu.addAction(act_report)
+        
+        menu.addSeparator()
+        
+        act_change_theme = QAction("Switch Theme (Light/Dark)", self)
+        act_change_theme.triggered.connect(self.toggle_theme)
+        menu.addAction(act_change_theme)
+        
+        act_exit = QAction("Exit MiniMe", self)
+        act_exit.triggered.connect(QApplication.instance().quit)
+        menu.addAction(act_exit)
+        
+        return menu
+
+    def update_workspace_focus_action_text(self):
+        if self.is_pomodoro_active:
+            mins, secs = divmod(self.pomodoro_remaining_seconds, 60)
+            self.act_focus.setText(f"⏱️ Cancel Focus ({mins:02d}:{secs:02d})")
+        else:
+            self.act_focus.setText("⏱️ Start Focus Session")
 
     # System Tray Integration
     def setup_tray_icon(self):
         self.tray_icon = QSystemTrayIcon(self)
         
-        # Load a default tray icon (using happy.svg rendered to tray if possible, or fallback circle)
         icon_path = os.path.join(AVATARS_DIR, "happy.svg")
         if os.path.exists(icon_path):
             self.tray_icon.setIcon(QIcon(icon_path))
         else:
             self.tray_icon.setIcon(QApplication.style().standardIcon(QApplication.style().SP_ComputerIcon))
             
-        tray_menu = QMenu()
-        tray_menu.setStyleSheet("padding: 5px;")
-        
-        act_show = QAction("Show MiniMe", self)
-        act_show.triggered.connect(self.show)
-        
-        act_hide = QAction("Hide MiniMe", self)
-        act_hide.triggered.connect(self.hide)
-        
-        act_exit = QAction("Quit", self)
-        act_exit.triggered.connect(QApplication.instance().quit)
-        
-        tray_menu.addAction(act_show)
-        tray_menu.addAction(act_hide)
-        tray_menu.addSeparator()
-        tray_menu.addAction(act_exit)
-        
+        # Re-use actions menu for the system tray
+        tray_menu = self.create_actions_menu()
         self.tray_icon.setContextMenu(tray_menu)
         self.tray_icon.show()
 
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
-    
-    # Enable high DPI scaling
     app.setAttribute(Qt.AA_UseHighDpiPixmaps)
     
-    # Hide application from macOS Dock to keep it as a pure widget desktop companion
-    # (Optional, but highly matches modern widget behavior)
     if sys.platform == "darwin":
         try:
-            from AppKit import NSBundle, NSApplicationActivationPolicyProhibited
+            from AppKit import NSBundle
             info = NSBundle.mainBundle().infoDictionary()
             info["LSUIElement"] = "1"
         except ImportError:
             pass
 
     companion = MiniMeCompanion()
-    companion.show()
     sys.exit(app.exec())
