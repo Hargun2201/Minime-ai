@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="100%" height="100%">
+  <defs>
+    <linearGradient id="bodyGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#4facfe" />
+      <stop offset="100%" stop-color="#00f2fe" />
+    </linearGradient>
+    <filter id="glow" x="-10%" y="-10%" width="120%" height="120%">
+      <feDropShadow dx="0" dy="4" stdDeviation="4" flood-color="#00f2fe" flood-opacity="0.4"/>
+    </filter>
+  </defs>
+  <!-- Body -->
+  <rect x="15" y="15" width="70" height="70" rx="35" fill="url(#bodyGrad)" filter="url(#glow)" />
+  <!-- Face Screen -->
+  <rect x="25" y="25" width="50" height="40" rx="15" fill="#1c1e24" />
+  <!-- Happy Eyes -->
+  <path d="M 33 48 Q 38 40 43 48" stroke="#00f2fe" stroke-width="4" stroke-linecap="round" fill="none" />
+  <path d="M 57 48 Q 62 40 67 48" stroke="#00f2fe" stroke-width="4" stroke-linecap="round" fill="none" />
+  <!-- Smile -->
+  <path d="M 45 54 Q 50 59 55 54" stroke="#00f2fe" stroke-width="3" stroke-linecap="round" fill="none" />
+  <!-- Cheeks -->
+  <circle cx="31" cy="52" r="3" fill="#ff758c" opacity="0.6" />
+  <circle cx="69" cy="52" r="3" fill="#ff758c" opacity="0.6" />
+</svg>

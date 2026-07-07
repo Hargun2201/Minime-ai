@@ -1,0 +1,5 @@
+PySide6>=6.5.0
+# Optional libraries for voice, speech, etc. (handled with graceful fallbacks if not installed)
+pyttsx3>=2.90
+SpeechRecognition>=3.10.0
+PyAudio>=0.2.13
