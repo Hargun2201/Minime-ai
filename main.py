@@ -90,9 +90,19 @@ class MiniMeCompanion(QWidget):
 
     def init_ui(self):
         # Configure Frameless, Translucent, Always-on-Top Window
-        self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.SubWindow)
+        self.setWindowFlags(Qt.Tool | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
         self.setAttribute(Qt.WA_TranslucentBackground)
         self.setFixedSize(300, 480)
+        
+        # Position window in the bottom-right corner of the primary screen
+        try:
+            screen_geom = QApplication.primaryScreen().availableGeometry()
+            x = screen_geom.width() - 320
+            y = screen_geom.height() - 500
+            self.move(x, y)
+        except Exception as e:
+            logger.warning(f"Failed to position window: {e}")
+
         
         # Set Global Theme Stylesheet
         self.apply_theme()
